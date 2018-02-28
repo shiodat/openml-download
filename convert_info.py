@@ -1,4 +1,6 @@
 # coding: utf-8
+import pandas as pd
+
 
 df = pd.read_csv('data-info.csv')
 
@@ -9,7 +11,7 @@ def feature_type(row):
         return 'category'
     else:
         return 'mix'
-    
+
 def convert_numeric_features(row):
     if row['NumberOfClasses'] == -1:
         return row['NumberOfNumericFeatures'] - 1
@@ -21,13 +23,13 @@ def convert_symbolic_features(row):
         return row['NumberOfSymbolicFeatures']
     else:
         return row['NumberOfSymbolicFeatures'] - 1
-    
+
 def ml_type(row):
     if row['NumberOfClasses'] == -1:
         return 'regression'
     else:
         return 'classification'
-        
+
 df['NumberOfFeatures'] = df['NumberOfFeatures'] - 1
 df['NumberOfSymbolicFeatures'] = df.apply(lambda row: convert_symbolic_features(row), axis=1)
 df['NumberOfNumericFeatures'] = df.apply(lambda row: convert_numeric_features(row), axis=1)
