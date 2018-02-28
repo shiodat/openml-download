@@ -22,7 +22,7 @@
 
 2. Access your account page and go to API AUTHENTICATION, then you can find your api key.
 
-3. Edit config at openml-download/api.yaml.
+3. Edit config at `openml.yaml`.
 
     - api_key: your api key
     - cache_dir: location of cache.
