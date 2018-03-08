@@ -1,5 +1,7 @@
 # coding: utf-8
 
+import collections
+import json
 import os
 
 import numpy as np
@@ -8,75 +10,136 @@ import pandas as pd
 import yaml
 
 
-# load config.
-with open('openml.yaml') as f:
-    config = yaml.load(f)
-
-# set data directory.
-save_dir = os.path.expanduser(config['save_dir'])
-if save_dir[-1] != os.sep:
-    save_dir = save_dir + os.sep
-data_dir = save_dir + 'data' + os.sep
-os.makedirs(data_dir, exist_ok=True)
-
-# set OpenML cache.
-openml.config.apikey = config['api_key']
-openml.config.set_cache_directory(os.path.expanduser(config['cache_dir']))
-
-# save dataset information.
-def save_info(dataset_ids):
-    data_info = openml.datasets.list_datasets()
-    data_info = pd.DataFrame.from_dict(data_info, orient='index')
-    data_info = data_info.loc[data_info['did'].isin(dataset_ids)]
-    data_info.to_csv(save_dir + 'info.csv', index=False)
-
-# get OpenML dataset list.
-datasets = pd.read_csv('datasets.csv')
-dataset_ids = datasets['id'].tolist()
-save_info(dataset_ids)
+def make_directory(d):
+    d = os.path.expanduser(d)
+    if d[-1] != os.sep:
+        d = d + os.sep
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
-def to_csv(dataset_id):
-     # get dataset from OpenML repository.
-    dataset = openml.datasets.get_dataset(dataset_id)
+class Downloader(object):
 
-    # convert dataset to numpy.ndarray format.
-    X, categorical_indicator, attribute_names = \
+    def __init__(self, api_key, cache_dir, save_dir):
+        self.api_key = api_key
+        self.cache_dir = make_directory(cache_dir)
+        self.save_dir = make_directory(save_dir)
+        openml.config.apikey = self.api_key
+        openml.config.set_cache_directory(self.cache_dir)
+
+    def get_all(self, dataset_ids):
+        saved_dataset_ids = []
+        anomaly_labels = []
+        feature_types = []
+        contains_missings = []
+        ml_types = []
+        
+        for i, dataset_id in enumerate(dataset_ids):
+            try:
+                anomaly_label, feature_type, contains_missing, ml_type =\
+                    self.get_dataset(dataset_id)
+                anomaly_labels.append(anomaly_label)
+                feature_types.append(feature_type)
+                contains_missings.append(contains_missing)
+                ml_types.append(ml_type)
+                saved_dataset_ids.append(dataset_id)
+            except Exception as e:
+                print('[Exception] id=', dataset_id, e)
+            print('{0:>3d}% finished.'.format(
+                  int(100 * (i + 1) / len(dataset_ids))))
+        
+        self.get_metadata(saved_dataset_ids, anomaly_labels, 
+                          feature_types, contains_missings, ml_types)
+
+    def get_dataset(self, dataset_id):
+        # Set save directory.
+        data_dir = self.save_dir + 'data' + os.sep
+
+        # Get dataset from OpenML repository.
+        dataset = openml.datasets.get_dataset(dataset_id)
+
+        X, categorical_indicator, attribute_names = \
             dataset.get_data(return_categorical_indicator=True,
                              return_attribute_names=True)
+        target_name = dataset.default_target_attribute
+        print(dataset_id, target_name)
 
-    # convert dataset to pandas.DataFrame format.
-    df = pd.DataFrame(X, columns=attribute_names)
-    for is_category, name in zip(categorical_indicator, attribute_names):
-        if not is_category:
-            continue
-        tokens = dataset.retrieve_class_labels(target_name=name)
-        def convert(x):
-            if np.isnan(x):
-                return x
+        contains_missing_value = np.isnan(X).any()
+
+        # Save dataset to csv file.
+        X = X.astype(str)
+        anomaly_label = ''
+        ml_type = ''
+
+        for i, (is_category, name) in enumerate(zip(categorical_indicator, 
+                                                    attribute_names)):
+            if not is_category:
+                if name == target_name:
+                    ml_type = 'regression'
+                continue
+
+            tokens = dataset.retrieve_class_labels(target_name=name)
+            for token_id, token in enumerate(tokens):
+                X[:, i][np.where(X[:, i] == str(float(token_id)))] = token
+
+            if name == target_name:
+                # In case of classification dataset, get anomaly label.
+                values, counts = np.unique(X[:, i], return_counts=True)
+                anomaly_label = values[np.argmin(counts)]
+                ml_type = 'classification'
+
+        df = pd.DataFrame(X, columns=attribute_names)
+        df = df.rename(columns={target_name: 'target'})
+        df.to_csv(data_dir + dataset.name + '.csv', index=False)
+
+        # Save columns to json file.
+        column_hints = []
+        num_category = 0
+        num_float = 0
+        for is_category, name in zip(categorical_indicator, attribute_names):
+            if name == target_name:
+                name = 'target'
             else:
-                return tokens[int(x)]
-        df[name] = df[name].apply(convert)
+                if is_category:
+                    num_category += 1
+                else:
+                    num_float += 1
+            hint = {
+                'name': name,
+                'column_type': 'category' if is_category else 'float'
+            }
+            column_hints.append(hint)
 
-    # rename target name to 'target'.
-    df = df.rename(columns={dataset.default_target_attribute: 'target'})
+        if num_category == 0:
+            feature_type = 'float'
+        elif num_float == 0:
+            feature_type = 'category'
+        else:
+            feature_type = 'mix'
 
-    # save dataframe to csv file.
-    df.to_csv(data_dir + dataset.name + '.csv', index=False)
+        with open(data_dir + dataset.name + '_columns.csv', 'w') as f:
+            json.dump(column_hints, f, indent=4)
+
+        return anomaly_label, feature_type, contains_missing_value, ml_type
+
+    def get_metadata(self, dataset_ids, anomaly_labels,
+                     feature_types, contains_missings, ml_types):
+        info = openml.datasets.list_datasets()
+        info = pd.DataFrame.from_dict(info, orient='index')
+        info = info.loc[info['did'].isin(dataset_ids)]
+        info['AnomalyLabel'] = anomaly_labels
+        info['FeatureType'] = feature_types
+        info['ContainsMissingValues'] = contains_missings
+        info['MLType'] = ml_types 
+        info.to_csv(self.save_dir + 'info.csv', index=False)
 
 
-succeed_dataset_ids = []
-
-for i, dataset_id in enumerate(dataset_ids):
-    try:
-        to_csv(dataset_id)
-    except Exception as e:
-        print(e)
-
-    succeed_dataset_ids.append(dataset_id)
-
-    # display progress.
-    progress = int((i + 1) / len(dataset_ids) * 100)
-    print('{0:>3d}% finished.'.format(progress))
-
-save_info(succeed_dataset_ids)
+if __name__ == '__main__':
+    datasets = pd.read_csv('datasets.csv')
+    dataset_ids = datasets['id'].tolist()
+    with open('openml.yaml') as f:
+        config = yaml.load(f)
+    downloader = Downloader(config['api_key'], 
+                            config['cache_dir'], 
+                            config['save_dir'])
+    downloader.get_all(dataset_ids)
