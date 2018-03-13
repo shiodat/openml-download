@@ -24,8 +24,11 @@ class Downloader(object):
         self.api_key = api_key
         self.cache_dir = make_directory(cache_dir)
         self.save_dir = make_directory(save_dir)
+        self.info = openml.datasets.list_datasets()
         openml.config.apikey = self.api_key
         openml.config.set_cache_directory(self.cache_dir)
+	
+
 
     def get_all(self, dataset_ids):
         saved_dataset_ids = []
@@ -43,6 +46,16 @@ class Downloader(object):
                 contains_missings.append(contains_missing)
                 ml_types.append(ml_type)
                 saved_dataset_ids.append(dataset_id)
+                print(dataset_id)
+                
+                try:
+                    self.get_metadata(saved_dataset_ids, anomaly_labels, 
+                                      feature_types, contains_missings, ml_types)
+                except Exception as e:
+                    anomaly_labels = anomaly_labels[:-1]
+                    feature_types = feature_types[:-1]
+                    contains_missings = contains_missings[:-1]
+                    ml_types = ml_types[:-1]
             except Exception as e:
                 print('[Exception] id=', dataset_id, e)
             print('{0:>3d}% finished.'.format(
@@ -68,7 +81,7 @@ class Downloader(object):
 
         # Save dataset to csv file.
         X = X.astype(str)
-        anomaly_label = ''
+        anomaly_label = 'none'
         ml_type = ''
 
         for i, (is_category, name) in enumerate(zip(categorical_indicator, 
@@ -124,9 +137,12 @@ class Downloader(object):
 
     def get_metadata(self, dataset_ids, anomaly_labels,
                      feature_types, contains_missings, ml_types):
-        info = openml.datasets.list_datasets()
+
+        import copy
+        info = copy.deepcopy(self.info)
         info = pd.DataFrame.from_dict(info, orient='index')
         info = info.loc[info['did'].isin(dataset_ids)]
+        print(len(info), len(anomaly_labels), len(feature_types), len(ml_types), len(contains_missings))
         info['AnomalyLabel'] = anomaly_labels
         info['FeatureType'] = feature_types
         info['ContainsMissingValues'] = contains_missings
