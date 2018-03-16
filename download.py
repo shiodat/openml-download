@@ -138,10 +138,15 @@ class Downloader(object):
         info = copy.deepcopy(self.info)
         info = pd.DataFrame.from_dict(info, orient='index')
         info = info.loc[info['did'].isin(dataset_ids)]
-        info['AnomalyLabel'] = anomaly_labels
-        info['FeatureType'] = feature_types
-        info['ContainsMissingValues'] = contains_missings
-        info['MLType'] = ml_types
+
+        additional_info = pd.DataFrame({
+            'did': dataset_ids,
+            'AnomalyLabel': anomaly_labels,
+            'FeatureType': feature_types,
+            'MLType': ml_types})
+
+        info = pd.merge(info, additional_info, how='inner')
+
         info.to_csv(self.save_dir + 'info.csv', index=False)
 
 
